@@ -2,7 +2,7 @@
 import networkx as nx
 from fenics import *
 import sys
-sys.path.append('../')
+sys.path.append('../..')
 from graphnics import *
 
 time_stepping_schemes = {'IE':{'b1':Constant(0), 'b2':Constant(1)},

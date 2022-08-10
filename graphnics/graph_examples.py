@@ -1,6 +1,6 @@
 
 import networkx as nx
-from .fenics_graph import *
+from fenics_graph import *
 
 def make_line_graph(n):
     '''
