@@ -105,10 +105,11 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-customassembly', help='whether to do custom assembly of real spaces', default=True, type=str)
+    parser.add_argument('-customassembly', help='whether to do custom assembly of real spaces', default=1, type=int)
     args = parser.parse_args()
 
-    if args.customassembly: 
+    if bool(args.customassembly):
+        print("Using custom assembly (Firedrake)")
         modelfunc = hydraulic_network_with_custom_assembly
     else: 
         modelfunc = hydraulic_network_simulation
