@@ -2,8 +2,10 @@
 import networkx as nx
 from fenics import *
 import sys
-sys.path.append('../..')
-from graphnics import *
+sys.path.append('../../graphnics')
+
+from fenics_graph import *
+from utils import *
 
 time_stepping_schemes = {'IE':{'b1':Constant(0), 'b2':Constant(1)},
                          'CN':{'b1':Constant(0.5), 'b2':Constant(0.5)}}
@@ -44,8 +46,9 @@ class HydraulicNetwork:
         a = Constant(0)*p*phi*dx
 
         for i, e in enumerate(self.G.edges):
-            
-            Res = self.G.edges[e]['res']
+
+            #Res = self.G.edges[e]['res']
+            Res = 1.0 # To be equivalent with firedrake formulation #CHECKME
             dx_edge = Measure("dx", domain = self.G.edges[e]['submesh'])
             
             # Add variational terms defined on edge
