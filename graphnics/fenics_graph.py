@@ -1,6 +1,7 @@
 import networkx as nx
 import numpy as np
 from fenics import *
+from utils import timeit
 
 '''
 The Graphnics class constructs fenics meshes from networkx directed graphs.
@@ -38,7 +39,7 @@ class FenicsGraph(nx.DiGraph):
         self.global_mesh = None # global mesh for all the edges in the graph
 
 
-    def make_mesh(self, n=1, store_mesh=True): 
+    def make_mesh(self, n=1, store_mesh=True, use_markers=False): 
         '''
         Makes a fenics mesh on the graph with 2^n cells on each edge
         
@@ -59,6 +60,7 @@ class FenicsGraph(nx.DiGraph):
         self.geom_dim = geom_dim
 
         self.num_edges = len(self.edges)
+        print("num edges = ", self.num_edges)
 
         # Make list of vertex coordinates and the cells connecting them
         vertex_coords = np.asarray( [self.nodes[v]['pos'] for v in self.nodes()  ] )
@@ -77,18 +79,20 @@ class FenicsGraph(nx.DiGraph):
 
         editor.close()
 
-
         # Make meshfunction containing edge ixs
         mf = MeshFunction('size_t', mesh, 1)
         mf.array()[:]=range(0,len(self.edges()))
-        self.mf = mf
-        File('plots/test.pvd')<<mf
 
+        # Make meshfunction containing vertices marking (boundary, bifurcations)
+        self.mf_v = MeshFunction('size_t', mesh, 0, 0)
         
+        
+        print("refinements n = ", n)
         # Refine global mesh until desired resolution
         for i in range(0, n):
             mesh = refine(mesh)
             mf = adapt(mf, mesh)
+        File('plots/test_mf.pvd')<<mf
 
         # If the mesh is not supposed to be stored (just returned), we are done
         # as we only return the global mesh
@@ -105,12 +109,11 @@ class FenicsGraph(nx.DiGraph):
 
         # Make and store one submesh for each edge
         for i, (u,v) in enumerate(self.edges):
-            self.edges[u,v]['submesh']=MeshView.create(self.mf, i)
+            self.edges[u,v]['submesh'] = MeshView.create(self.mf, i)
+            self.edges[u,v]['tag'] = i
 
         # Compute tangent vectors
         self.assign_tangents()
-
-
 
         # Give each edge a Meshfunction that marks the vertex if its a boundary node 
         # or a bifurcation node
@@ -131,20 +134,25 @@ class FenicsGraph(nx.DiGraph):
             
             num_conn_edges = len(self.in_edges(v)) + len(self.out_edges(v))
             
-            if num_conn_edges==1: 
+            if num_conn_edges == 1:
+                print("Adding boundary_ixs : ", v)
                 boundary_ixs.append(v) 
-            elif num_conn_edges>1: 
+            elif num_conn_edges>1:
+                print("Adding bifurcations_ixs : ", v)
                 bifurcation_ixs.append(v)
-            elif num_conn_edges==0:
+            elif num_conn_edges == 0:
                 print(f'Node {v} in G is lonely (i.e. unconnected)')
 
         # Store these as global variables
         self.bifurcation_ixs = bifurcation_ixs
         self.boundary_ixs = boundary_ixs
+        print("bifs = ", self.bifurcation_ixs)
+        print("bnds = ", self.boundary_ixs)
         
         # Loop through all bifurcation ixs and mark the vfs
         for b in self.bifurcation_ixs:
 
+            #self.mf_v.array()[b] = BIF_IN
             for e in self.in_edges(b):
                 msh = self.edges[e]['submesh']
                 vf = self.edges[e]['vf']
@@ -153,6 +161,7 @@ class FenicsGraph(nx.DiGraph):
                 if len(bif_ix_in_submesh)>0:
                     vf.array()[bif_ix_in_submesh[0]]=BIF_IN
 
+            #self.mf_v.array()[b] = BIF_IN
             for e in self.out_edges(b):
                 msh = self.edges[e]['submesh']
                 vf = self.edges[e]['vf']
@@ -219,6 +228,7 @@ class FenicsGraph(nx.DiGraph):
         return dot(grad(f), self.global_tangent)
 
 
+    @timeit
     def jump_vector(self, q, ix, j):
         '''
         Returns the signed jump vector for a flux function q on edge ix 
@@ -229,12 +239,14 @@ class FenicsGraph(nx.DiGraph):
 
         L = Constant(0)*q*dx
         
-        for e in self.in_edges(j):
+        for i, e in enumerate(self.in_edges(j)):
+            print("jump_vector - edges (in) ", i)
             ds_edge = Measure('ds', domain=self.edges[e]['submesh'], subdomain_data=self.edges[e]['vf'])
             edge_ix = edge_list.index(e)
             if ix==edge_ix: L += q*ds_edge(BIF_IN)
 
-        for e in self.out_edges(j):
+        for i, e in enumerate(self.out_edges(j)):
+            print("jump_vector - edges (out) ", i)
             ds_edge = Measure('ds', domain=self.edges[e]['submesh'], subdomain_data=self.edges[e]['vf'])
             edge_ix = edge_list.index(e)
             if ix==edge_ix: L -= q*ds_edge(BIF_OUT)
@@ -242,6 +254,36 @@ class FenicsGraph(nx.DiGraph):
         b = assemble(L)
 
         return b
+
+
+    # def jump_vector_2(self, q, ix, j):
+    #     '''
+    #     Returns the signed jump vector for a flux function q on edge ix 
+    #     over bifurcation j
+    #     '''
+        
+    #     edge_list = list(self.edges.keys())
+
+    #     L = Constant(0)*q*dx
+        
+    #     for i, e in enumerate(self.in_edges(j)):
+    #         print("jump_vector - edges (in) ", i)
+    #         #ds_edge = Measure('ds', domain=self.edges[e]['submesh'], subdomain_data=self.edges[e]['vf'])
+    #         ds_edge = Measure('ds', domain=self.global_mesh, subdomain_data=self.mf)
+    #         edge_ix = edge_list.index(e)
+    #         if ix==edge_ix: L += q*ds_edge(BIF_IN)
+
+    #     for i, e in enumerate(self.out_edges(j)):
+    #         print("jump_vector - edges (out) ", i)
+    #         #ds_edge = Measure('ds', domain=self.edges[e]['submesh'], subdomain_data=self.edges[e]['vf'])
+    #         ds_edge = Measure('ds', domain=self.global_mesh, subdomain_data=self.mf)            
+    #         edge_ix = edge_list.index(e)
+    #         if ix==edge_ix: L -= q*ds_edge(BIF_OUT)
+
+    #     # b = assemble(L)
+    #     b = assemble_mixed(L)
+
+    #     return b
 
     def ip_jump_lm(self, qs, xi, i):
         '''
@@ -265,12 +307,43 @@ class FenicsGraph(nx.DiGraph):
             edge_ix = edge_list.index(e)
             ip += qs[edge_ix]*xi*ds_edge(BIF_IN)
 
+
         for e in self.out_edges(i):
             ds_edge = Measure('ds', domain=self.edges[e]['submesh'], subdomain_data=self.edges[e]['vf'])
             edge_ix = edge_list.index(e)
             ip -= qs[edge_ix]*xi*ds_edge(BIF_OUT)
 
         return ip
+
+    # def ip_jump_lm_markers(self, q, xi, i):
+    #     '''
+    #     Returns the inner product between the jump of edge fluxes [qs]
+    #     and the lagrange multiplier xi over bifurcation i
+        
+    #     Args:
+    #         qs (list): list of edge flux functions
+    #         xi (df.function): lagrange multiplier on bifurcation i
+    #         i (int): bifurcation index
+
+    #     Returns:
+    #         ip 
+    #     '''
+
+    #     edge_list = list(self.edges.keys())
+
+    #     ip = 0
+    #     ds_edge = Measure('ds', domain=self.global_mesh, subdomain_data=self.mf_v)
+    #     for e in self.in_edges(i):
+    #         #edge_ix = edge_list.index(e)
+    #         #ip += qs[edge_ix]*xi*ds_edge(BIF_IN)
+    #         ip += q*xi*ds_edge(BIF_IN)
+
+    #     for e in self.out_edges(i):
+    #         #edge_ix = edge_list.index(e)
+    #         #ip -= qs[edge_ix]*xi*ds_edge(BIF_OUT)
+    #         ip -= q*xi*ds_edge(BIF_OUT)
+
+    #     return ip
 
 
 

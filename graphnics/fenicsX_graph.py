@@ -1,6 +1,6 @@
 import networkx as nx
 import numpy as np
-#from fenics import *
+
 import ufl
 from mpi4py import MPI
 from dolfinx import fem, io, mesh
@@ -41,37 +41,31 @@ class FenicsxGraph(nx.DiGraph):
     def __init__(self):
         nx.DiGraph.__init__(self)
         self.global_mesh = None # global mesh for all the edges in the graph
-
-        gmsh.initialize()
-        # Choose if Gmsh output is verbose
-        gmsh.option.setNumber("General.Terminal", 0)
-
+        self.bifurcation_ixs = []
+        self.boundary_ixs = []
         
-    def make_mesh(self, n=1, store_mesh=True, use_markers=False):
+    def make_mesh(self, n=1):
         '''
         Makes a fenics mesh on the graph with 2^n cells on each edge
         
         Args:
             n (int): number of refinements
-            store (bool): whether to store the mesh as a class variable
         Returns:
             mesh (df.mesh): the global mesh
-        
-        If store=True, the full mesh is stored in self.global_mesh and a submesh is stored
-        for each edge
         
         '''
         self.comm = MPI.COMM_WORLD
 
         self.geom_dim = len(self.nodes[1]['pos'])
         self.num_edges = len(self.edges)
-        print("num edges = ", self.num_edges)
 
         domain = ufl.Mesh(ufl.VectorElement("Lagrange", "interval", 1))
         vertex_coords = np.asarray( [self.nodes[v]['pos'] for v in self.nodes()  ] )
         cells_array = np.asarray( [ [u, v] for u,v in self.edges() ] )
 
+        gmsh.initialize()
         lcar = 1/3. #FIXME : To be added as a parameter
+        #lcar = 1.0
         model = gmsh.model()
         pts = []
         lines = []
@@ -80,17 +74,22 @@ class FenicsxGraph(nx.DiGraph):
 
         for i,c in enumerate(cells_array):
             lines.append(gmsh.model.geo.addLine(pts[c[0]], pts[c[1]]))
-            gmsh.model.addPhysicalGroup(1, [lines[-1]], i)
 
         gmsh.model.geo.synchronize()
+        for i,line in enumerate(lines):
+            gmsh.model.addPhysicalGroup(1, [line], i)
+        
         gmsh.model.mesh.generate(1)
         
         self.msh, self.subdomains, self.boundaries = io.gmshio.model_to_mesh(
             gmsh.model, comm=MPI.COMM_WORLD, rank=0, gdim=3)
         gmsh.finalize()
 
+        # print("mesh coords = ", self.msh.geometry.x)
+
         with io.XDMFFile(self.comm, "mesh.xdmf", "w") as file:
             file.write_mesh(self.msh)
+            file.write_meshtags(self.subdomains)
 
         tdim = self.msh.topology.dim
         gdim = self.msh.geometry.dim
@@ -98,11 +97,17 @@ class FenicsxGraph(nx.DiGraph):
         self.global_tangent = fem.Function(DG0)
 
         for i, (u,v) in enumerate(self.edges):
-            #edge_subdomain = self.subdomains.indices[self.subdomains.values == i]
             edge_subdomain = self.subdomains.find(i)
+            
             self.edges[u,v]['submesh'], self.edges[u,v]['entity_map'] = mesh.create_submesh(self.msh, tdim, edge_subdomain)[0:2]
+            submesh_points = self.edges[u,v]['submesh'].geometry.x
+            # print("i = ", i)
+            # print("submesh_points  = ", submesh_points)
+            
+            # print("(u,v) = (", u, ",", v, ")" )
+            # print("edge ", i, ", entity map = ", self.edges[u,v]['entity_map'])
             self.edges[u,v]['tag'] = i
-
+            
             # Compute tangent
             tangent = np.asarray(self.nodes[v]['pos'])-np.asarray(self.nodes[u]['pos'])
             tangent *= 1/np.linalg.norm(tangent)
@@ -120,6 +125,9 @@ class FenicsxGraph(nx.DiGraph):
             file.write_function(self.global_tangent)
 
         # Marking the bifurcations (in/out) and boundaries (in/out) for extermities of each edges
+        # self.bifurcation_ixs = []
+        # self.boundary_ixs = []
+        self.bifurcation_meshes = dict()
         for n, v in enumerate(self.nodes()):
             num_conn_edges = len(self.in_edges(v)) + len(self.out_edges(v))
             if num_conn_edges == 0:
@@ -127,7 +135,11 @@ class FenicsxGraph(nx.DiGraph):
 
             bifurcation = bool(num_conn_edges > 1)
             boundary = bool(num_conn_edges == 1)
-
+            if bifurcation:
+                self.bifurcation_ixs.append(v)
+            if boundary:
+                self.boundary_ixs.append(v)            
+            
             for i,e in enumerate(self.in_edges(v)):
                 e_msh = self.edges[e]['submesh']
                 entities = mesh.locate_entities(e_msh,0,
@@ -166,13 +178,8 @@ class FenicsxGraph(nx.DiGraph):
                 file.write_meshtags(self.edges[e]['vf'])
 
             point_imap = e_msh.topology.index_map(0)
-            num_points = point_imap.size_local + point_imap.num_ghosts
-            entity_maps = {e_msh: [self.edges[e]['entity_map'].index(entity)
-                                   if entity in self.edges[e]['entity_map'] else -1
-                                   for entity in range(num_points)]}
 
             # Create measure for integration
-            #point_integration_entities = {1: []}
             point_integration_entities = {}
             cell_to_point = e_msh.topology.connectivity(1, 0)
             point_to_cell = e_msh.topology.connectivity(0, 1)
@@ -185,12 +192,123 @@ class FenicsxGraph(nx.DiGraph):
                         # Get a cell connected to the point
                         cell = point_to_cell.links(pt)[0]
                         local_pt = cell_to_point.links(cell).tolist().index(pt)
-                        print("edge ", i, " local_pt = ", local_pt, " marked by ", key)
                         # FIXME : Check the cell index here
                         point_integration_entities[key].extend([cell, local_pt])
 
-            print("point_integration_entities = ", point_integration_entities)
             self.edges[e]['ds'] = ufl.Measure("ds", subdomain_data=point_integration_entities, domain=e_msh)
+
+
+    def compute_edge_lengths(self):
+        '''
+        Compute and store the length of each edge
+        '''
+        
+        for e in self.edges():
+            v1, v2 = e
+            dist = np.linalg.norm(np.asarray(self.nodes()[v2]['pos'])-np.asarray(self.nodes()[v1]['pos']))
+            self.edges()[e]["length"] = dist
+
+    def dds(self, f):
+        '''
+        function for derivative df/ds along graph
+        '''
+        return ufl.dot(ufl.grad(f), self.global_tangent)
+
+    def jump_vector(self, q, ix, j):
+        '''
+        Returns the signed jump vector for a flux function q on edge ix 
+        over bifurcation j
+        '''
+        
+        edge_list = list(self.edges.keys())
+        
+        # Iitialize form to zero
+        zero = fem.Function(q.ufl_function_space())        
+        L = zero*q*ufl.dx
+
+        # Add point integrals (jump)
+        for i, e in enumerate(self.in_edges(j)):
+            ds_edge = ufl.Measure('ds', domain=self.edges[e]['submesh'], subdomain_data=self.edges[e]['vf'])
+            edge_ix = edge_list.index(e)
+            if ix==edge_ix: L += q*ds_edge(BIF_IN)
+
+        for i, e in enumerate(self.out_edges(j)):
+            ds_edge = ufl.Measure('ds', domain=self.edges[e]['submesh'], subdomain_data=self.edges[e]['vf'])
+            edge_ix = edge_list.index(e)
+            if ix==edge_ix: L -= q*ds_edge(BIF_OUT)
+
+        L = fem.form(L)
+        b = fem.petsc.assemble_vector(L)
+
+        return b
+   
+
+### --- Graph examples --- ###
+            
+def make_line_graph(n):
+    '''
+    Make a graph along the unit x-axis with n nodes
+    '''
+
+    G = FenicsxGraph()
+    dx = 1/(n-1)
+    print("Adding nodes 0 to ", n)
+    G.add_nodes_from(range(0,n))
+    for i in range(0,n):
+        G.nodes[i]['pos']=[i*dx,0,0]
+    
+    for i in range(0,n-1):
+        print("Adding edge [", i, ", ", i+1, "]")
+        G.add_edge(i,i+1)
+
+    G.make_mesh()
+    return G
+
+def make_Y_bifurcation():
+
+    G = FenicsxGraph()
+    
+    G.add_nodes_from([0, 1, 2, 3])
+    G.nodes[0]['pos']=[0,0,0]
+    G.nodes[1]['pos']=[0,0.5,0]
+    G.nodes[2]['pos']=[-0.5,1,0]
+    G.nodes[3]['pos']=[0.5,1,0]
+
+    G.add_edge(0,1)
+    G.add_edge(1,2)
+    G.add_edge(1,3)
+
+    G.make_mesh()
+    return G
+
+
+def make_double_Y_bifurcation():
+
+    G = FenicsxGraph()
+
+    G.add_nodes_from([0, 1, 2, 3,4,5,6,7])
+    G.nodes[0]['pos']=[0,0,0]
+    G.nodes[1]['pos']=[0,0.5,0]
+    G.nodes[2]['pos']=[-0.5,1,0]
+    G.nodes[3]['pos']=[0.5,1,0]
+
+    G.add_edge(0,1)
+    G.add_edge(1,2)
+    G.add_edge(1,3)
+
+    G.nodes[4]['pos']=[-0.75,1.5,0]
+    G.nodes[5]['pos']=[-0.25,1.5,0]
+
+    G.nodes[6]['pos']=[0.25,1.5,0]
+    G.nodes[7]['pos']=[0.75,1.5,0]
+    
+    G.add_edge(2,4)
+    G.add_edge(2,5)
+    G.add_edge(3,6)
+    G.add_edge(3,7)
+
+    G.make_mesh()
+    return G
 
 def test_fenics_graph():
     # Make simple y-bifurcation

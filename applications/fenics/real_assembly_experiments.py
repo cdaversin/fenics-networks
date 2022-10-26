@@ -9,8 +9,7 @@ from fenics_graph import *
 from utils import *
 from graph_examples import *
 from utils import timeit
-
-    
+  
 parameters["form_compiler"]["cpp_optimize"] = True
 
 @timeit
@@ -32,15 +31,16 @@ def hydraulic_network_with_custom_assembly(G, f=Constant(0), p_bc=Constant(0)):
 
     # Flux spaces on each segment, ordered by the edge list
     submeshes = list(nx.get_edge_attributes(G, 'submesh').values())
-    P2s = [FunctionSpace(msh, 'CG', 3) for msh in submeshes] 
-    
+    #P2s = [FunctionSpace(msh, 'CG', 3) for msh in submeshes] # FFC Call (1)
+    P2s = [FunctionSpace(msh, 'CG', 2) for msh in submeshes] # FFC Call (1)
+
     # Pressure space on global mesh
-    P1 = FunctionSpace(mesh, 'CG', 2) # Pressure space (on whole mesh)
+    # P1 = FunctionSpace(mesh, 'CG', 2) # Pressure space (on whole mesh) # FFC Call (1)
+    P1 = FunctionSpace(mesh, 'CG', 1) # Pressure space (on whole mesh) # FFC Call (1)
     
     ### Function spaces
     spaces = P2s + [P1]
     W = MixedFunctionSpace(*spaces) 
-
 
     # Trial and test functions
     vphi = TestFunctions(W)
@@ -61,10 +61,11 @@ def hydraulic_network_with_custom_assembly(G, f=Constant(0), p_bc=Constant(0)):
     a = Constant(0)*p*phi*dx
     L = Constant(0)*phi*dx
 
-
     # Using methodology from firedrake we assemble the jumps as a vector
     # and input the jumps in the matrix later
-    vecs = [[G.jump_vector(q, ix, j) for j in G.bifurcation_ixs] for ix, q in enumerate(qs)] 
+    # FFC Call (7) : 6 FFC Calls for ix=0, and one with ix=1
+    vecs = [[G.jump_vector(q, ix, j) for j in G.bifurcation_ixs] for ix, q in enumerate(qs)]
+
     # now we can index by vecs[branch_ix][bif_ix]
     
     # Assemble edge contributions to a and L
@@ -120,8 +121,9 @@ if __name__ == '__main__':
     os.system('dijitso clean') 
     
     # Profile against a simple line graph with n nodes    
-    n = 3
-    G = make_line_graph(n)
+    #n = 9
+    #G = make_line_graph(n)
+    G = make_Y_bifurcation()
     G.make_mesh(1) # we use just one cell per edge 
     mesh = G.global_mesh
     num_bifs = len(G.bifurcation_ixs)
@@ -147,5 +149,5 @@ if __name__ == '__main__':
     
     qi.rename('q', '0.0')
     p.rename('p', '0.0')
-    File('plots/p.pvd')<<p
-    File('plots/q.pvd')<<qi
+    File('plots/p_submeshes.pvd')<<p
+    File('plots/q_submeshes.pvd')<<qi
