@@ -124,7 +124,7 @@ if __name__ == '__main__':
     #n = 9
     #G = make_line_graph(n)
     G = make_Y_bifurcation()
-    G.make_mesh(1) # we use just one cell per edge 
+    #G.make_mesh(1) # we use just one cell per edge 
     mesh = G.global_mesh
     num_bifs = len(G.bifurcation_ixs)
 
@@ -142,6 +142,10 @@ if __name__ == '__main__':
         
     vars = qp0.split()
     p = vars[-1]
+
+    for i,var in enumerate(vars):
+        var.rename('q'+str(i), '0.0')
+        File("plots/q_" + str(i) + "submeshes.pvd") << var
     
     q = GlobalFlux(G, vars[0:-1])
     qi = interpolate(q, VectorFunctionSpace(G.global_mesh, 'DG', 2, G.geom_dim))

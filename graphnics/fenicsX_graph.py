@@ -64,8 +64,8 @@ class FenicsxGraph(nx.DiGraph):
         cells_array = np.asarray( [ [u, v] for u,v in self.edges() ] )
 
         gmsh.initialize()
-        lcar = 1/3. #FIXME : To be added as a parameter
-        #lcar = 1.0
+        #lcar = 0.5 #FIXME : To be added as a parameter
+        lcar = 1.0
         model = gmsh.model()
         pts = []
         lines = []
@@ -177,25 +177,25 @@ class FenicsxGraph(nx.DiGraph):
                 file.write_mesh(e_msh)
                 file.write_meshtags(self.edges[e]['vf'])
 
-            point_imap = e_msh.topology.index_map(0)
+            # point_imap = e_msh.topology.index_map(0)
 
-            # Create measure for integration
-            point_integration_entities = {}
-            cell_to_point = e_msh.topology.connectivity(1, 0)
-            point_to_cell = e_msh.topology.connectivity(0, 1)
+            # # Create measure for integration
+            # point_integration_entities = {}
+            # cell_to_point = e_msh.topology.connectivity(1, 0)
+            # point_to_cell = e_msh.topology.connectivity(0, 1)
 
-            for key in np.hstack(self.edges[e]["b_values"]):
-                point_integration_entities[key] = []
+            # for key in np.hstack(self.edges[e]["b_values"]):
+            #     point_integration_entities[key] = []
                 
-                for pt in self.edges[e]["entities"]:
-                    if pt < point_imap.size_local and pt in self.edges[e]['vf'].find(key):
-                        # Get a cell connected to the point
-                        cell = point_to_cell.links(pt)[0]
-                        local_pt = cell_to_point.links(cell).tolist().index(pt)
-                        # FIXME : Check the cell index here
-                        point_integration_entities[key].extend([cell, local_pt])
+            #     for pt in self.edges[e]["entities"]:
+            #         if pt < point_imap.size_local and pt in self.edges[e]['vf'].find(key):
+            #             # Get a cell connected to the point
+            #             cell = point_to_cell.links(pt)[0]
+            #             local_pt = cell_to_point.links(cell).tolist().index(pt)
+            #             # FIXME : Check the cell index here
+            #             point_integration_entities[key].extend([cell, local_pt])
 
-            self.edges[e]['ds'] = ufl.Measure("ds", subdomain_data=point_integration_entities, domain=e_msh)
+            # self.edges[e]['ds'] = ufl.Measure("ds", subdomain_data=point_integration_entities, domain=e_msh)
 
 
     def compute_edge_lengths(self):
