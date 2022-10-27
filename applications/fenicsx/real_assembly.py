@@ -53,6 +53,13 @@ def hydraulic_network_with_custom_assembly(G, f=None):
 
     # Pressure space on global mesh
     P2 = fem.FunctionSpace(msh, ("Lagrange", 2)) # Pressure space (on whole mesh) # FFC Call (1)
+
+    # Dictionnary of function spaces (to be used in solve function)
+    function_spaces = {}
+    for space in P3s:
+        function_spaces[space._cpp_object] = space
+    function_spaces[P2._cpp_object] = P2
+
     
     # Fluxes on each branch
     qs = []
@@ -111,9 +118,9 @@ def hydraulic_network_with_custom_assembly(G, f=None):
     a[-1][-1] = fem.form(zero*p*phi*dx)
     L[-1] = fem.form(zero*phi*dx)
 
-    return (G, a, L, vecs)
+    return (G, a, L, function_spaces, vecs)
 
-def mixed_dim_fenics_solve_custom(G, a, L, jump_vecs):
+def mixed_dim_fenics_solve_custom(G, a, L, function_spaces, jump_vecs):
 
     A = fem.petsc.assemble_matrix_block(a)
     A.assemble()
@@ -182,19 +189,18 @@ def mixed_dim_fenics_solve_custom(G, a, L, jump_vecs):
     fluxes = []
     start = 0
     for i, e in enumerate(G.edges):
-        # FIXME : Don't rebuild the function space
-        P3_space = fem.FunctionSpace(a[i][i].mesh, ("Lagrange", 3))
-        q = fem.Function(P3_space)
-        offset = P3_space.dofmap.index_map.size_local * P3_space.dofmap.index_map_bs
+        q_space = function_spaces[a[i][i].function_spaces[0]]
+        q = fem.Function(q_space)
+        offset = q_space.dofmap.index_map.size_local * q_space.dofmap.index_map_bs
         q.x.array[:offset] = x.array_r[start:start + offset]
         q.x.scatter_forward()
         start += offset
         print("q[",i,"] = ", q.x.array)
         fluxes.append(q)
 
-    P2_space = fem.FunctionSpace(a[-1][-1].mesh, ("Lagrange", 2))
-    offset = P2_space.dofmap.index_map.size_local * P2_space.dofmap.index_map_bs
-    pressure = fem.Function(P2_space)
+    p_space = function_spaces[a[-1][-1].function_spaces[0]]
+    offset = p_space.dofmap.index_map.size_local * p_space.dofmap.index_map_bs
+    pressure = fem.Function(p_space)
     pressure.x.array[:(len(x.array_r) - start)] = x.array_r[start:start + offset]
     pressure.x.scatter_forward()
     print("pressure = ", pressure.x.array)
@@ -240,8 +246,8 @@ if __name__ == '__main__':
     G = make_Y_bifurcation()
     msh = G.msh
     
-    (G, a, L, vecs) = hydraulic_network_with_custom_assembly(G)
-    (fluxes, pressure) = mixed_dim_fenics_solve_custom(G, a, L, vecs)
+    (G, a, L, fs, vecs) = hydraulic_network_with_custom_assembly(G)
+    (fluxes, pressure) = mixed_dim_fenics_solve_custom(G, a, L, fs, vecs)
     
     # Write to file
     for i,q in enumerate(fluxes):
