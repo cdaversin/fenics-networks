@@ -1,7 +1,7 @@
 from fenics import *
 import scipy.sparse as sp
 from petsc4py import PETSc
-
+from pathlib import Path
 
 from time import time
 from functools import wraps
@@ -19,32 +19,64 @@ def timeit(func):
         start = time()
         result = func(*args, **kwargs)
         end = time()
-        time_info = f'{func.__name__} executed in {end - start:.3f} seconds'
-        print(time_info)
+        time_info = f'{func.__name__}: {end - start:.3f} s \n'
+        
+        # Write to profiling file
+        p = Path("./plots_perf")
+        p.mkdir(exist_ok=True)
+        with (p / 'profiling.txt').open('a') as f:
+            f.write(time_info)
+
         return result
 
     return wrapper
+
+
+def timing_dict(outdir_path: str):
+    """
+    Read 'profiling.txt' and create a dictionary out of it
+    Args:
+       str : outdir path
+    """
+    p = Path(outdir_path)
+    timing_file = (p / 'profiling.txt').open('r')
+    timing_dict: Dict[str, List[float]] = dict()
+
+    for line in timing_file:
+        split_line = line.strip().split(':')
+        keyword = split_line[0]
+        value = float(split_line[1].split()[0])
+
+        if keyword in timing_dict.keys():
+            timing_dict[keyword].append(value)
+        else:
+            timing_dict[keyword] = [value]
+
+    return timing_dict
 
 
 @timeit
 def call_assemble_mixed_system(a, L, qp0):
     return assemble_mixed_system(a==L, qp0)
 
-
-def mixed_dim_fenics_solve_custom(a, L, W, mesh, jump_vecs, G):
+@timeit
+def mixed_dim_fenics_assembly_custom(a, L, W, mesh, jump_vecs, G):
         
     # Assemble the system
     qp0 = Function(W)
-    
     system = call_assemble_mixed_system(a, L, qp0)
     
     A_list = system[0]
     rhs_blocks = system[1]
-
+    
     # Convert our real rows to PetSc
     jump_vecs = [[convert_vec_to_petscmatrix(row) for row in rowrow] for rowrow in jump_vecs] 
     # and get the transpose
     jump_vecs_T = [[PETScMatrix(row.mat().transpose(PETSc.Mat())) for row in rowrow] for rowrow in jump_vecs]
+
+    # for i,jump_vec in enumerate(jump_vecs):
+    #     for j, jump in enumerate(jump_vec):
+    #         print("jump vec ", i , "-", j, "= ", jump.str(True))
     
     zero = zero_PETScMat(1,1)
     zero_row = zero_PETScMat(1,W.sub_space(-1).dim())
@@ -59,8 +91,6 @@ def mixed_dim_fenics_solve_custom(a, L, W, mesh, jump_vecs, G):
     num_bifs = len(G.bifurcation_ixs)
     
     A_list_n = []
-    
-    #vecs[branch_ix][bif_ix]
     
     # Add all the rows corresponding to q1, q2, ... q_n
     for i in range(0, nrows_A_old-1):
@@ -78,15 +108,22 @@ def mixed_dim_fenics_solve_custom(a, L, W, mesh, jump_vecs, G):
             A_list_n += [jump_vecs[j][i]]  # copy in the jump vectors
         A_list_n += [zero_row] # no jump in pressure so we add a single zero row
         A_list_n += [zero]*num_bifs # last block corresponds to (lam, xi)
-    
-    
-    # Solve the system
+        
+    rhs_blocks_n = rhs_blocks + [zero_PETScVec(1)]*num_bifs
+
     A_ = PETScNestMatrix(A_list_n) # recombine blocks now with Lagrange multipliers
     b_ = Vector()
-    rhs_blocks_n = rhs_blocks + [zero_PETScVec(1)]*num_bifs
     A_.init_vectors(b_, rhs_blocks_n)
     A_.convert_to_aij() # Convert MATNEST to AIJ for LU solver
-   
+
+    return (A_, b_)
+
+@timeit
+def mixed_dim_fenics_solve_custom(A_, b_, W, mesh, G):
+
+    num_bifs = len(G.bifurcation_ixs)
+    qp0 = Function(W)
+    
     sol_ = Vector(mesh.mpi_comm(), sum([P2.dim() for P2 in W.sub_spaces()]) + num_bifs)
     solver = PETScLUSolver()
     solver.solve(A_, sol_, b_)
@@ -104,9 +141,9 @@ def mixed_dim_fenics_solve(a, L, W, mesh):
     
     # Assemble the system
     qp0 = Function(W)
-    print('Mixed dim fenics assembly...')
+    # print('Mixed dim fenics assembly...')
     system = call_assemble_mixed_system(a, L, qp0)
-    print('Done')
+    # print('Done')
     
     A_list = system[0]
     rhs_blocks = system[1]
