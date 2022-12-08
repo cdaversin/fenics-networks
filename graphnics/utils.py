@@ -5,6 +5,7 @@ from pathlib import Path
 
 from time import time
 from functools import wraps
+import pandas as pd
 
 
 def timeit(func):
@@ -53,6 +54,23 @@ def timing_dict(outdir_path: str):
             timing_dict[keyword] = [value]
 
     return timing_dict
+
+
+def timing_table(outdir_path: str):
+    """
+    Read 'profiling.txt' and create a table data file
+    Args:
+       str : outdir path
+    """
+    t_dict = timing_dict(outdir_path)
+
+    df = pd.DataFrame({
+        'n': t_dict["n"],
+        'forms': t_dict["hydraulic_network_forms_custom"],
+        'assembly': t_dict["mixed_dim_fenics_assembly_custom"],
+        'solve': t_dict["mixed_dim_fenics_solve_custom"]})
+
+    df.to_csv(outdir_path + '/timings.txt', sep='\t', index=False)
 
 
 @timeit

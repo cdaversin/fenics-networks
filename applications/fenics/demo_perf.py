@@ -18,7 +18,7 @@ from utils import timeit
 parameters["form_compiler"]["cpp_optimize"] = True
 
 @timeit
-def hydraulic_network_with_custom_assembly(G, f=Constant(0), p_bc=Constant(0)):
+def hydraulic_network_forms_custom(G, f=Constant(0), p_bc=Constant(0)):
     '''
     Solve hydraulic network model 
         R q + d/ds p = 0
@@ -99,6 +99,21 @@ def hydraulic_network_with_custom_assembly(G, f=Constant(0), p_bc=Constant(0)):
     #qp0 = mixed_dim_fenics_solve_custom(a, L, W, mesh, vecs, G)
     #return qp0
 
+@timeit
+def export_results(qp0, reponame="plots/"):
+    vars = qp0.split()
+    q = GlobalFlux(G, vars[0:-1])
+    qi = interpolate(q, VectorFunctionSpace(G.global_mesh, 'DG', 2, G.geom_dim))
+    p = vars[-1]
+
+    for i,var in enumerate(vars):
+        var.rename('q'+str(i), '0.0')
+        File(reponame + "q_" + str(i) + ".pvd") << var
+    File(reponame + "q_global.pvd") << qi
+    File(reponame + "p.pvd") << p
+
+    return (qi, p)
+
 if __name__ == '__main__':
     '''
     Do time profiling for hydraulic network model implemented with fenics-mixed-dim
@@ -106,18 +121,17 @@ if __name__ == '__main__':
         customassembly (bool): whether to assemble real spaces separately as vectors 
     customassembly should lead to speed up
     '''
-    
-    # Clear fenics cache
+
     print('Clearing cache')
     os.system('dijitso clean') 
-
+    
     path = Path("./plots_perf")
     if path.exists() and path.is_dir():
         shutil.rmtree(path)
 
     path.mkdir(exist_ok=True)
     for n in range(2, 5):
-    
+
         with (path / 'profiling.txt').open('a') as f:
             f.write("n: " + str(n) + "\n")
 
@@ -127,37 +141,23 @@ if __name__ == '__main__':
         # Run with cache cleared and record times
         p_bc = Expression('x[1]', degree=1)
 
-        # Compute mesh and forms
-        (a, L, W, mesh, vecs, G) = hydraulic_network_with_custom_assembly(G, p_bc = p_bc)
+        # Compute forms
+        (a, L, W, mesh, vecs, G) = hydraulic_network_forms_custom(G, p_bc = p_bc)
         # Assemble
         (A_, b_) = mixed_dim_fenics_assembly_custom(a, L, W, mesh, vecs, G)
         # Solve
         qp0 = mixed_dim_fenics_solve_custom(A_, b_, W, mesh, G)
-            
-        vars = qp0.split()
-        p = vars[-1]
 
-        for i,var in enumerate(vars):
-            var.rename('q'+str(i), '0.0')
-            File("plots/q_" + str(i) + "submeshes_n" + str(n) + ".pvd") << var
-    
-        q = GlobalFlux(G, vars[0:-1])
-        qi = interpolate(q, VectorFunctionSpace(G.global_mesh, 'DG', 2, G.geom_dim))
-        p = vars[-1]
-
-        # print("q min = ", min(qi.vector().get_local()))
-        # print("q max = ", max(qi.vector().get_local()))
-        print("q mean = ", np.mean(qi.vector().get_local()))
-    
-        # qi.rename('q', '0.0')
-        # p.rename('p', '0.0')
-        # File('plots/p_submeshes.pvd')<<p
-        # File('plots/q_submeshes.pvd')<<qi
+        q, p = export_results(qp0, reponame="plots/")
+        print("q mean = ", np.mean(q.vector().get_local()))
 
     t_dict = timing_dict("./plots_perf")
-    print("compute forms time = ", t_dict["hydraulic_network_with_custom_assembly"])
+    timing_table("./plots_perf") # Generate timings table file
+
+    print("compute forms time = ", t_dict["hydraulic_network_forms_custom"])
     print("assembly time = ", t_dict["mixed_dim_fenics_assembly_custom"])
     print("solving time = ", t_dict["mixed_dim_fenics_solve_custom"])
+    # print("export time = ", t_dict["export_results"])
     
     # fig, ax = plt.subplots()
     # ax.plot(t_dict["n"], t_dict["mixed_dim_fenics_solve_custom"])
