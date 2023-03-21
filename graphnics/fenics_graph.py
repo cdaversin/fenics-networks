@@ -226,6 +226,10 @@ class FenicsGraph(nx.DiGraph):
         tangent = TangentFunction(self, degree=1)
         tangent_i = interpolate(tangent, VectorFunctionSpace(self.global_mesh, 'DG', 0, self.geom_dim) )
         self.global_tangent = tangent_i
+        #print("self.global_tangent = ", self.global_tangent.vector().get_local())
+        with XDMFFile(self.global_mesh.mpi_comm(), "tangent.xdmf") as file:
+            file.write(self.global_tangent)
+
         
     
     def dds(self, f):
@@ -249,15 +253,18 @@ class FenicsGraph(nx.DiGraph):
         for i, e in enumerate(self.in_edges(j)):
             ds_edge = Measure('ds', domain=self.edges[e]['submesh'], subdomain_data=self.edges[e]['vf'])
             edge_ix = edge_list.index(e)
-            if ix==edge_ix: L += q*ds_edge(BIF_IN)
+            if ix==edge_ix:
+                L += q*ds_edge(BIF_IN)
 
         for i, e in enumerate(self.out_edges(j)):
             ds_edge = Measure('ds', domain=self.edges[e]['submesh'], subdomain_data=self.edges[e]['vf'])
             edge_ix = edge_list.index(e)
-            if ix==edge_ix: L -= q*ds_edge(BIF_OUT)
+            if ix==edge_ix:
+                L -= q*ds_edge(BIF_OUT)
 
         b = assemble(L)
-
+        #print("jump vector = ", b.str(True))
+        
         return b
 
 
@@ -310,13 +317,16 @@ class GlobalFlux(UserExpression):
     def eval_cell(self, values, x, cell):
         edge = self.G.mf[cell.index]
         tangent = self.G.tangents[edge][1]
-        values[0] = self.qs[edge](x)*tangent[0]
-        values[1] = self.qs[edge](x)*tangent[1]
-        if self.G.geom_dim == 3: 
-            values[2] = self.qs[edge](x)*tangent[2]
-
+        # values[0] = self.qs[edge](x)*tangent[0]
+        # values[1] = self.qs[edge](x)*tangent[1]
+        # if self.G.geom_dim == 3: 
+        #     values[2] = self.qs[edge](x)*tangent[2]
+        #print("self.qs[edge](", x, ") = ",self.qs[edge](x))
+        values[0] = self.qs[edge](x)
+        
     def value_shape(self):
-        return (self.G.geom_dim,)
+        return ()
+        #return (self.G.geom_dim,)
 
 
 class TangentFunction(UserExpression):

@@ -14,8 +14,58 @@ from fenics_graph import *
 from utils import *
 from graph_examples import *
 from utils import timeit
+from networkmodels import *
   
 parameters["form_compiler"]["cpp_optimize"] = True
+
+lm_spaces = True
+lm_jump_vectors = False
+
+# lm_spaces = False
+# lm_jump_vectors = True
+
+
+@timeit
+def hydraulic_network_forms(G, f=Constant(0), p_bc=Constant(0)):
+    '''
+    Set up spaces and solve hydraulic network model 
+        R q + d/ds p = 0
+            d/ds q = f
+    on graph G, with bifurcation condition q_in = q_out 
+
+    Args:
+        G (fg.FenicsGraph): problem domain
+        f (df.function): source term
+        p_bc (df.function): neumann bc for pressure
+    '''
+    
+    
+    mesh = G.global_mesh
+
+    # Flux spaces on each segment, ordered by the edge list
+    submeshes = list(nx.get_edge_attributes(G, 'submesh').values())
+    P2s = [FunctionSpace(msh, 'CG', 2) for msh in submeshes] 
+    
+    # Real space on each bifurcation, ordered by G.bifurcation_ixs
+    LMs = [FunctionSpace(mesh, 'R', 0) for b in G.bifurcation_ixs] 
+
+    # Pressure space on global mesh
+    P1 = FunctionSpace(mesh, 'CG', 1) # Pressure space (on whole mesh)
+    
+    ### Function spaces
+    spaces = P2s + LMs + [P1]
+    W = MixedFunctionSpace(*spaces) 
+
+    # Trial and test functions
+    vphi = TestFunctions(W)
+    qp = TrialFunctions(W)
+
+    model = HydraulicNetwork(G, f, p_bc)
+    
+    a = model.a(qp, vphi)
+    L = model.L(vphi)
+    
+    return (a, L, W, mesh, G)
 
 @timeit
 def hydraulic_network_forms_custom(G, f=Constant(0), p_bc=Constant(0)):
@@ -38,12 +88,10 @@ def hydraulic_network_forms_custom(G, f=Constant(0), p_bc=Constant(0)):
 
     # Flux spaces on each segment, ordered by the edge list
     submeshes = list(nx.get_edge_attributes(G, 'submesh').values())
-    P3s = [FunctionSpace(msh, 'CG', 3) for msh in submeshes] # FFC Call (1)
-    #P2s = [FunctionSpace(msh, 'CG', 2) for msh in submeshes] # FFC Call (1)
+    P3s = [FunctionSpace(msh, 'CG', 3) for msh in submeshes]
 
     # Pressure space on global mesh
-    P2 = FunctionSpace(mesh, 'CG', 2) # Pressure space (on whole mesh) # FFC Call (1)
-    # P1 = FunctionSpace(mesh, 'CG', 1) # Pressure space (on whole mesh) # FFC Call (1)
+    P2 = FunctionSpace(mesh, 'CG', 2) # Pressure space (on whole mesh)
     
     ### Function spaces
     spaces = P3s + [P2]
@@ -90,10 +138,16 @@ def hydraulic_network_forms_custom(G, f=Constant(0), p_bc=Constant(0)):
         a -= p*G.dds(vs[i])*dx_edge
         a += phi*G.dds(qs[i])*dx_edge
 
+        #a += qs[i]*vs[i]*Constant(0.0)*dx_edge        
+        #a -= p*dot(grad(vs[i]), Constant((0.0, 1.0, 0.0)))*dx_edge
+        # a -= p*vs[i].dx(1)*dx_edge
+        
         # Add boundary condition for inflow/outflow boundary node
         L += p_bc*vs[i]*ds_edge(BOUN_IN)
         L -= p_bc*vs[i]*ds_edge(BOUN_OUT)
+        #L  = vs[i]*dx_edge
 
+        
     return (a, L, W, mesh, vecs, G)
     # Solve
     #qp0 = mixed_dim_fenics_solve_custom(a, L, W, mesh, vecs, G)
@@ -103,17 +157,20 @@ def hydraulic_network_forms_custom(G, f=Constant(0), p_bc=Constant(0)):
 def export_results(qp0, reponame="plots/"):
     vars = qp0.split()
     q = GlobalFlux(G, vars[0:-1])
-    qi = interpolate(q, VectorFunctionSpace(G.global_mesh, 'DG', 2, G.geom_dim))
+    #qi = interpolate(q, VectorFunctionSpace(G.global_mesh, 'DG', 2, G.geom_dim))
+    qi = interpolate(q, FunctionSpace(G.global_mesh, 'DG', 1))
     p = vars[-1]
 
-    for i,var in enumerate(vars):
+    for i,var in enumerate(vars[0:-1]):
         var.rename('q'+str(i), '0.0')
         File(reponame + "q_" + str(i) + ".pvd") << var
+    #     print("q[", i ,"] = ", var.vector().get_local())
+    # print("p = ", p.vector().get_local())
     File(reponame + "q_global.pvd") << qi
     File(reponame + "p.pvd") << p
 
     return (qi, p)
-
+    
 if __name__ == '__main__':
     '''
     Do time profiling for hydraulic network model implemented with fenics-mixed-dim
@@ -130,7 +187,7 @@ if __name__ == '__main__':
         shutil.rmtree(path)
 
     path.mkdir(exist_ok=True)
-    for n in range(2, 5):
+    for n in range(2, 7):
 
         with (path / 'profiling.txt').open('a') as f:
             f.write("n: " + str(n) + "\n")
@@ -139,26 +196,45 @@ if __name__ == '__main__':
         mesh = G.global_mesh
 
         # Run with cache cleared and record times
-        p_bc = Expression('x[1]', degree=1)
+        p_bc = Expression('x[1]', degree=2)
+        #p_bc = Constant(1)
 
-        # Compute forms
-        (a, L, W, mesh, vecs, G) = hydraulic_network_forms_custom(G, p_bc = p_bc)
-        # Assemble
-        (A_, b_) = mixed_dim_fenics_assembly_custom(a, L, W, mesh, vecs, G)
-        # Solve
-        qp0 = mixed_dim_fenics_solve_custom(A_, b_, W, mesh, G)
+        if lm_spaces:
+            # Compute forms
+            (a, L, W, mesh, G) = hydraulic_network_forms(G, p_bc = p_bc)
+            # Assemble
+            (A_, b_) = mixed_dim_fenics_assembly(a, L, W, mesh)
+            # Solve
+            qp0 = mixed_dim_fenics_solve(A_, b_, W, mesh)
 
-        q, p = export_results(qp0, reponame="plots/")
-        print("q mean = ", np.mean(q.vector().get_local()))
+            q, p = export_results(qp0, reponame="plots/lm_spaces/n" + str(n))
 
-    t_dict = timing_dict("./plots_perf")
-    timing_table("./plots_perf") # Generate timings table file
+            t_dict = timing_dict("./plots_perf")
+            timing_table("./plots_perf", mode="lm_spaces") # Generate timings table file
 
-    print("compute forms time = ", t_dict["hydraulic_network_forms_custom"])
-    print("assembly time = ", t_dict["mixed_dim_fenics_assembly_custom"])
-    print("solving time = ", t_dict["mixed_dim_fenics_solve_custom"])
-    # print("export time = ", t_dict["export_results"])
-    
-    # fig, ax = plt.subplots()
-    # ax.plot(t_dict["n"], t_dict["mixed_dim_fenics_solve_custom"])
-    # plt.show()
+            print("n = ", t_dict["n"])
+            print("compute forms time = ", t_dict["hydraulic_network_forms"])
+            print("assembly time = ", t_dict["mixed_dim_fenics_assembly"])
+            print("solving time = ", t_dict["mixed_dim_fenics_solve"])
+
+            
+        elif lm_jump_vectors:
+            # Compute forms
+            (a, L, W, mesh, vecs, G) = hydraulic_network_forms_custom(G, p_bc = p_bc)
+            print("hey")
+            # Assemble
+            (A_, b_) = mixed_dim_fenics_assembly_custom(a, L, W, mesh, vecs, G)
+            # Solve
+            qp0 = mixed_dim_fenics_solve_custom(A_, b_, W, mesh, G)
+            # qp0 should be the same !
+
+            q, p = export_results(qp0, reponame="plots/lm_jump_vectors/n" + str(n))
+            # print("q mean = ", np.mean(q.vector().get_local()))
+
+            t_dict = timing_dict("./plots_perf")
+            timing_table("./plots_perf", mode="lm_jump_vectors") # Generate timings table file
+
+            print("n = ", t_dict["n"])
+            print("compute forms time = ", t_dict["hydraulic_network_forms_custom"])
+            print("assembly time = ", t_dict["mixed_dim_fenics_assembly_custom"])
+            print("solving time = ", t_dict["mixed_dim_fenics_solve_custom"])

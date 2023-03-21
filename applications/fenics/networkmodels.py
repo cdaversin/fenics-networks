@@ -232,10 +232,11 @@ def hydraulic_network_simulation(G, f=Constant(0), p_bc=Constant(0)):
     L = model.L(vphi)
     
     # Solve
-    qp0 = mixed_dim_fenics_solve(a, L, W, mesh)
+    # qp0 = mixed_dim_fenics_solve(a, L, W, mesh)
+    # return qp0
+    (A_, b_) = mixed_dim_fenics_assembly(a, L, W, mesh)
+    qp0 = mixed_dim_fenics_solve(A_, b_, W, mesh)
     return qp0
-
- 
         
 
 

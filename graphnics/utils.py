@@ -56,7 +56,7 @@ def timing_dict(outdir_path: str):
     return timing_dict
 
 
-def timing_table(outdir_path: str):
+def timing_table(outdir_path: str, mode="lm_spaces"):
     """
     Read 'profiling.txt' and create a table data file
     Args:
@@ -64,13 +64,21 @@ def timing_table(outdir_path: str):
     """
     t_dict = timing_dict(outdir_path)
 
-    df = pd.DataFrame({
-        'n': t_dict["n"],
-        'forms': t_dict["hydraulic_network_forms_custom"],
-        'assembly': t_dict["mixed_dim_fenics_assembly_custom"],
-        'solve': t_dict["mixed_dim_fenics_solve_custom"]})
-
-    df.to_csv(outdir_path + '/timings.txt', sep='\t', index=False)
+    if mode == "lm_spaces":
+        df = pd.DataFrame({
+            'n': t_dict["n"],
+            'forms': t_dict["hydraulic_network_forms"],
+            'assembly': t_dict["mixed_dim_fenics_assembly"],
+            'solve': t_dict["mixed_dim_fenics_solve"]})
+        df.to_csv(outdir_path + '/timings_lm_spaces.txt', sep='\t', index=False)
+        
+    elif mode == "lm_jump_vectors" :
+        df = pd.DataFrame({
+            'n': t_dict["n"],
+            'forms': t_dict["hydraulic_network_forms_custom"],
+            'assembly': t_dict["mixed_dim_fenics_assembly_custom"],
+            'solve': t_dict["mixed_dim_fenics_solve_custom"]})
+        df.to_csv(outdir_path + '/timings_lm_jump_vectors.txt', sep='\t', index=False)
 
 
 @timeit
@@ -86,16 +94,12 @@ def mixed_dim_fenics_assembly_custom(a, L, W, mesh, jump_vecs, G):
     
     A_list = system[0]
     rhs_blocks = system[1]
-    
+
     # Convert our real rows to PetSc
     jump_vecs = [[convert_vec_to_petscmatrix(row) for row in rowrow] for rowrow in jump_vecs] 
     # and get the transpose
     jump_vecs_T = [[PETScMatrix(row.mat().transpose(PETSc.Mat())) for row in rowrow] for rowrow in jump_vecs]
 
-    # for i,jump_vec in enumerate(jump_vecs):
-    #     for j, jump in enumerate(jump_vec):
-    #         print("jump vec ", i , "-", j, "= ", jump.str(True))
-    
     zero = zero_PETScMat(1,1)
     zero_row = zero_PETScMat(1,W.sub_space(-1).dim())
     zero_col = zero_PETScMat(W.sub_space(-1).dim(),1)
@@ -143,6 +147,7 @@ def mixed_dim_fenics_solve_custom(A_, b_, W, mesh, G):
     qp0 = Function(W)
     
     sol_ = Vector(mesh.mpi_comm(), sum([P2.dim() for P2 in W.sub_spaces()]) + num_bifs)
+    #sol_ = Vector(mesh.mpi_comm(), sum([P2.dim() for P2 in W.sub_spaces()])) #TEST without Lagrange mult
     solver = PETScLUSolver()
     solver.solve(A_, sol_, b_)
 
@@ -154,14 +159,11 @@ def mixed_dim_fenics_solve_custom(A_, b_, W, mesh, G):
         qp0.sub(s).vector().apply("insert")
     return qp0
 
-
-def mixed_dim_fenics_solve(a, L, W, mesh):
-    
+@timeit
+def mixed_dim_fenics_assembly(a, L, W, mesh):
     # Assemble the system
     qp0 = Function(W)
-    # print('Mixed dim fenics assembly...')
     system = call_assemble_mixed_system(a, L, qp0)
-    # print('Done')
     
     A_list = system[0]
     rhs_blocks = system[1]
@@ -172,11 +174,18 @@ def mixed_dim_fenics_solve(a, L, W, mesh):
     A_.init_vectors(b_, rhs_blocks)
     A_.convert_to_aij() # Convert MATNEST to AIJ for LU solver
 
+    return (A_, b_)
+
+@timeit
+def mixed_dim_fenics_solve(A_, b_, W, mesh):
+    
+    # Assemble the system
+    qp0 = Function(W)
+
     sol_ = Vector(mesh.mpi_comm(), sum([P2.dim() for P2 in W.sub_spaces()]))
     solver = PETScLUSolver()
     
     solver.solve(A_, sol_, b_)
-    
 
     # Transform sol_ into qp0 and update qp_
     dim_shift = 0
