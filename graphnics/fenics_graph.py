@@ -239,7 +239,6 @@ class FenicsGraph(nx.DiGraph):
         return dot(grad(f), self.global_tangent)
 
 
-    # @timeit
     def jump_vector(self, q, ix, j):
         '''
         Returns the signed jump vector for a flux function q on edge ix 
@@ -262,11 +261,11 @@ class FenicsGraph(nx.DiGraph):
             if ix==edge_ix:
                 L -= q*ds_edge(BIF_OUT)
 
-        b = assemble(L)
+        #b = assemble(L)
         #print("jump vector = ", b.str(True))
         
-        return b
-
+        #return b
+        return L
 
     def ip_jump_lm(self, qs, xi, i):
         '''

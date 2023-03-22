@@ -3,7 +3,7 @@ import scipy.sparse as sp
 from petsc4py import PETSc
 from pathlib import Path
 
-from time import time
+from time import perf_counter
 from functools import wraps
 import pandas as pd
 
@@ -17,9 +17,9 @@ def timeit(func):
 
     @wraps(func)
     def wrapper(*args, **kwargs):
-        start = time()
+        start = perf_counter()
         result = func(*args, **kwargs)
-        end = time()
+        end = perf_counter()
         time_info = f'{func.__name__}: {end - start:.3f} s \n'
         
         # Write to profiling file
@@ -86,7 +86,7 @@ def call_assemble_mixed_system(a, L, qp0):
     return assemble_mixed_system(a==L, qp0)
 
 @timeit
-def mixed_dim_fenics_assembly_custom(a, L, W, mesh, jump_vecs, G):
+def mixed_dim_fenics_assembly_custom(a, L, W, mesh, L_jumps, G):
         
     # Assemble the system
     qp0 = Function(W)
@@ -95,6 +95,9 @@ def mixed_dim_fenics_assembly_custom(a, L, W, mesh, jump_vecs, G):
     A_list = system[0]
     rhs_blocks = system[1]
 
+    # Assemble jump vector forms
+    jump_vecs = [[assemble(L_jump) for L_jump in rowrow] for rowrow in L_jumps] 
+    
     # Convert our real rows to PetSc
     jump_vecs = [[convert_vec_to_petscmatrix(row) for row in rowrow] for rowrow in jump_vecs] 
     # and get the transpose
