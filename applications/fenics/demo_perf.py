@@ -18,7 +18,7 @@ from networkmodels import *
 
 import argparse
   
-parameters["form_compiler"]["cpp_optimize"] = True
+# parameters["form_compiler"]["cpp_optimize"] = True
 
 # lm_spaces = True
 # lm_jump_vectors = False
@@ -174,6 +174,9 @@ if __name__ == '__main__':
                         help='Lagrange multipliers in Real spaces')
     parser.add_argument('-lm_jump_vectors', default=0, type=int,
                         help='Lagrange multipliers added manually as jump vectors')
+    parser.add_argument('-clear_cache', default=1, type=int,
+                        help='clearing cache (i.e. recompiling forms)')
+
     args = parser.parse_args()
     print("args = ", args)
 
@@ -184,8 +187,9 @@ if __name__ == '__main__':
     path.mkdir(exist_ok=True)
     n = args.N
 
-    print('Clearing cache')
-    os.system('dijitso clean')
+    if args.clear_cache:
+        print('Clearing cache')
+        os.system('dijitso clean')
         
     with (path / 'profiling.txt').open('a') as f:
         f.write("n: " + str(n) + "\n")
@@ -220,7 +224,6 @@ if __name__ == '__main__':
         print("jump_vectors")
         # Compute forms
         (a, L, W, mesh, L_jumps, G) = hydraulic_network_forms_custom(G, p_bc = p_bc)
-
         # Assemble
         (A_, b_) = mixed_dim_fenics_assembly_custom(a, L, W, mesh, L_jumps, G)
         # Solve
